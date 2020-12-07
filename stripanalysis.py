@@ -12,18 +12,21 @@ rundir = '/raid/fff'
 analyzed_runs = '/opt/cmssw/scripts/SiStripCronJob/analyzedruns.txt'
 failed_runs = '/opt/cmssw/scripts/SiStripCronJob/failedruns.txt'
 
-# Comepare runs in /raid/fff/ with a list of analyzed runs
+# Comepare runs in /raid/fff/ with a list of runs that have passed or failed analysis
+# Returns the runs not in either list
 def get_runlist():
-    runs = [ x.split('/')[-1] for x in glob.glob('{}/run*'.format(rundir)) ]
+    runs = [ x.split('/')[-1] for x in glob.glob('{}/run*'.format(rundir)) ][:70]
     if len(runs) == 0:
         print 'Found no runs in rundir: {}....aborting'.format(rundir)
         sys.exit()
     if os.path.exists(analyzed_runs):
-        analyzed = open(analyzed_runs, 'r').readlines()
+        analyzed = open(analyzed_runs, 'r').read().splitlines()
     else:
         analyzed = []
     if os.path.exists(failed_runs):
-        failed = open(failed_runs, 'r').readlines()
+        failed = open(failed_runs, 'r').read().splitlines()
+        # Strip off the fail reasons
+        failed = [fail.split()[0] for fail in failed]
     else:
         failed = []
     return list(set(runs) - set(analyzed) - set(failed))
@@ -36,52 +39,57 @@ def get_machine():
         sys.exit(1)
     return srv
 
-def write_to_file(run, good):
+def write_to_file(run, good, reason=[]):
     if good:
         filename = analyzed_runs
     else:
         filename = failed_runs
     f = open(filename, 'a+')
-    f.write('run%d\n'%run)
+    f.write('run%d'%run)
+    if not good and len(reason) > 0:
+        [f.write(' '+str(fail)) for fail in reason]
+    f.write("\n")
     f.close()
     print 'Appended run to', filename
 
 def validate_time(start, end):
     # Check the following:
-    #  - start time in DB
-    #  - start time not in future
-    #  - start time not after end time
-    #  - end time not in the future
+    # start time in DB
     if not start: return False
+    # start time not in future
     if start > datetime.datetime.now(): return False
+    # start time not after end time
     if start > end: return False
+    # end time not in the future
     if end > datetime.datetime.now(): return False
 
-    print 'Runtime is good'
     return True
 
 def validate_events(run):
     # Check that the output root file was created properly and make sure that all events were processed
     # If so, we can delete raw files
 
-    # First make sure json and EDM file exists
-    # First try getting json file using new format
+    # Use json files to get event number from raw files
+
+    # First make sure json file exists
     json_name = ['{rundir}/run{run}/run{run}_ls0000_EoR.jsn'.format(rundir=rundir,run=run)]
-    # If that doesn't exist, fall back to old file format
-    if not os.path.exists(json_name[0]):
+    try:
+        json_events = int(json.load(open(name, 'r'))['data'][0])
+    # If this fails, either json doesnt exist or is empty
+    # In either case, fall back to old method of reading all json
+    except:
         #print 'json file %s does not exist' % json_name
-        #print 'Instead looking for individual json files'
         json_name = glob.glob('{rundir}/run{run}/run{run}_ls*_index*.jsn'.format(rundir=rundir,run=run))
-    if len(json_name) == 0:
-        print 'Could not find any json files, unable to validate events'
-        return False
+        if len(json_name) == 0:
+            print 'Could not find any json files, unable to validate events'
+            return False
+        json_events = sum([int(json.load(open(name, 'r'))['data'][0]) for name in json_name])
+
+    # Make sure EDM file exists
     tfile_name = '{rundir}/run{run}/run{run}.root'.format(rundir=rundir,run=run)
     if not os.path.exists(tfile_name):
         print 'root file %s does not exist' % tfile_name
         return False
-
-    # Use json files to get event number from raw files
-    json_events = sum([int(json.load(open(name, 'r'))['data'][0]) for name in json_name])
     
     # Open up tree and get number of events from Events tree
     # If this fails, problem with root file
@@ -241,7 +249,7 @@ def analyze_runs(runs, partitions, rerun=False):
             print 'Will now perform analysis on run'
             if len(partition) == 1:
                 pass
-                os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=partition[0]))
+                #os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=partition[0]))
                 dbValid = validate_db(run, conn)
             else:
                 # for spy runs need to loop over all partitions
@@ -251,7 +259,7 @@ def analyze_runs(runs, partitions, rerun=False):
                     if validate_db(run, conn, part):
                         dbValid_part.append(True)
                     else:
-                        os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=part))
+                        #os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=part))
                         dbValid_part.append(validate_db(run, conn, part))
                 # Make sure check returns true for all partitions
                 dbValid = all(dbValid_part)
@@ -263,21 +271,20 @@ def analyze_runs(runs, partitions, rerun=False):
         # Finally, make sure all validation checks return True
         print '*** Analysis Validation Checks ****'
         print 'Run start and end time are consistent:', timeValid
-        print 'EDM File Good:', hadEDM
+        print 'EDM File Good:', hasEDM
         print 'Commissioning and source files exist, analysis added to DB:', dbValid
         print '**** Result ****'
-        if hasEDM and dbValid and timeValid:
-            print 'Run %d is good' % run
+        if timeValid and hasEDM and dbValid:
+            print 'Run %d is good\n' % run
             write_to_file(run, True)
         elif not rerun:
-            continue
             # If any check fails, try running it again
-            print 'One or more check failed, will re-run over run', run
+            print 'One or more check failed, will re-run over run\n', run
             analyze_runs(['run%d'%run], partitions, rerun=True)
         else:
             # If run fails second time, add to list of failed runs and continue
-            print 'Analysis failed a second time, adding run to fail list'
-            write_to_file(run, False)
+            print 'Analysis failed a second time, adding run to fail list\n'
+            write_to_file(run, False, [timeValid, hasEDM, dbValid])
             return
 
     return
@@ -293,7 +300,8 @@ def main():
         partions= ['TO', 'TP']
     partitions = ['TI', 'TM', 'TO', 'TP']
     runs = get_runlist()
-    runs = ['run334325', 'run312876', 'run338329', 'run336985', 'run324898', 'run325058', 'run325160']
+    print runs
+    #runs = ['run334325', 'run312876', 'run338329', 'run336985', 'run324898', 'run325058', 'run325160']
     #runs = ['run324898']
     if len(runs):
         analyze_runs(runs, partitions)
