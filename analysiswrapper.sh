@@ -1,6 +1,5 @@
 #!/bin/bash
 
-#source /nsfhome0/trackerpro/.bashrc
 
 echo "-------------------------------------------------------------------"
 date
@@ -32,43 +31,14 @@ else
     exit 0;
 fi
 
-# Settings for basic directories
-BASEDIR=/opt/cmssw
-echo "  CMSSW base directory     : "$BASEDIR
-DATALOC=/opt/cmssw/Data/closed
-echo "  Temporary storage area   : "$DATALOC
-
 # source CMSSW so we can query the database in the python script
-cd /opt/cmssw/Stable/current/src
+cd "/opt/cmssw/Stable/current/" # sym-link to current cmssw version
 eval `scram runtime -sh`
-cd /raid/cmssw/shifter/jmhogan/
+cd "/opt/cmssw/scripts/SiStripCronJob"
 getConfDb CONFDB_ONLINE
 echo "  ConfDb account setting   : "$CONFDB
 
-# Get the run range
-RUNMIN=999999
-RUNMAX=000000
-
-for USCFILE in `ls $DATALOC | grep USC`; do
-    RUN=`echo $USCFILE | cut -d. -f2`
-    #echo "testing run ${RUN}"
-    if [ "$RUN" -lt "$RUNMIN" ]; then
-	RUNMIN=$RUN
-    fi
-    if [ "$RUN" -gt "$RUNMAX" ]; then
-	RUNMAX=$RUN
-    fi
-done
-
-# strip leading zeros
-RUNMIN=$(expr $RUNMIN + 0)
-RUNMAX=$(expr $RUNMAX + 0)
-
-echo "found runmin = ${RUNMIN}"
-echo "found runmax = ${RUNMAX}"
-
-# run the python script to analyze all these runs
-python -u bulkanalysis_analysisupload.py --runmin $RUNMIN --runmax $RUNMAX
+#python -u stripanalysis.py
 
 echo "CRON done"
 
