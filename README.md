@@ -41,7 +41,7 @@ Once the run list has been obtained, they script loops through them in the `anal
 #### 3. Obtain run information from the RUN database
 
 The cx\_oracle module is used to query various databases. Before looping through the list of newly taken runs, the script first connects to cms\_trk\_r/1A3C5E7G:FIN@cms\_omds\_lb. When looping through the run list, the script will query the RUN database using the following sql command:
-`select PARTITIONNAME,RUNMODE,STARTTIME,ENDTIME from RUN a join PARTITION b on a.PARTITIONID=b.PARTITIONID where RUNNUMBER=$(RUNNUMBER)
+`select PARTITIONNAME,RUNMODE,STARTTIME,ENDTIME from RUN a join PARTITION b on a.PARTITIONID=b.PARTITIONID where RUNNUMBER=$(RUNNUMBER)`
 
 If nothing is returned from the database, the code assumes that the run is not yet ready to be analyzed, and skips the run without appending it to the good or failed analysis files.
 
@@ -56,38 +56,38 @@ Once the run has been found in the database, multiple checks are performed to de
 
 * Runmode:
     Only the following run modes are analyzed by this script
-    *2 -
+    * 2 -
         PEDESTAL
-    *4 -
+    * 4 -
         GAINSCAN
-    *5 -
+    * 5 -
         TIMING
-    *6 -
+    * 6 -
         LATENCY
-    *7 -
+    * 7 -
         DELAY
-    *11 -
+    * 11 -
         CONNECTION
-    *14 -
+    * 14 -
         VPSPSCAN
-    *15 -
+    * 15 -
         SCOPE
-    *16 -
+    * 16 -
         FAST\_CONNECTION
-    *17 -
+    * 17 -
         DELAY\_LAYER
-    *21 -
+    * 21 -
         VERY\_FAST\_CONNECTION
-    *27 -
+    * 27 -
         DELAY\_RANDOM
     If the cron-job is run on srv-s2b17-29-01 and srv-s2b17-30-01 in parallel, the following run modes will also be analyzed:
-    *3 -
+    * 3 -
         CALIBRATION
-    *19 -
+    * 19 -
         CALIBRATIONSCANPEAK
-    *20 -
+    * 20 -
         CALIBRATIONSCAN\_DECO
-    *33 -
+    * 33 -
         CALIBRATION\_DECO
 
 * Partition:
