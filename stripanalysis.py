@@ -4,7 +4,7 @@ import os,sys
 import getopt
 import cx_Oracle
 import glob
-import datetime
+import datetime, time
 import json
 import ROOT as r
 
@@ -15,7 +15,7 @@ failed_runs = '/opt/cmssw/scripts/SiStripCronJob/failedruns.txt'
 # Comepare runs in /raid/fff/ with a list of runs that have passed or failed analysis
 # Returns the runs not in either list
 def get_runlist():
-    runs = [ x.split('/')[-1] for x in glob.glob('{}/run*'.format(rundir)) ][:70]
+    runs = [ x.split('/')[-1] for x in glob.glob('{}/run*'.format(rundir)) ]
     if len(runs) == 0:
         print 'Found no runs in rundir: {}....aborting'.format(rundir)
         sys.exit()
@@ -119,9 +119,9 @@ def validate_events(run):
         return False
 
 def delete_raw(run):
+    #os.system('ls {rundir}/run{run}/*.raw'.format(rundir=rundir, run=run))
+    os.system('rm {rundir}/run{run}/*.raw'.format(rundir=rundir, run=run))
     return
-    os.system('ls {rundir}/run{run}/*.raw'.format(rundir=rundir, run=run))
-    #os.system('rm {rundir}/run{run}/*.raw'.format(rundir=rundir, run=run))
     
 # Note, only care about partition for spy runs, all other runs leave field blanks
 def validate_db(run, conn, partition=''):
@@ -129,7 +129,6 @@ def validate_db(run, conn, partition=''):
     hasClient = False
     hasSource = False
     hasDB = False
-    #os.system('ls /opt/cmssw/Data/{run}/'.format(run=run))
     if glob.glob('/opt/cmssw/Data/{run}/SiStripCommissioningClient_*{part}*{run}*.root'.format(part=partition, run=run)): hasClient=True
     if glob.glob('/opt/cmssw/Data/{run}/SiStripCommissioningSource_*{part}*{run}*.root'.format(part=partition, run=run)): hasSource=True
 
@@ -138,13 +137,12 @@ def validate_db(run, conn, partition=''):
         db_cmd = u"select ANALYSISID,VERSIONMAJORID,VERSIONMINORID,RUNNUMBER,ANALYSISTYPE,PARTITIONNAME from analysis a join partition b on a.partitionid=b.partitionid where runnumber=%d" % run
     else:
         db_cmd = u"select ANALYSISID,VERSIONMAJORID,VERSIONMINORID,RUNNUMBER,ANALYSISTYPE from analysis a join partition b on a.partitionid=b.partitionid where runnumber=%d and PARTITIONNAME='%s'" % (run, partition)
-    print db_cmd
     c.execute(db_cmd)
     try:
         results = c.fetchall()[0]
     except:
         print 'run not in db'
-        return False
+        return (hasClient and hasSource, False)
 
     # Want to make sure the entries aren't empty
     # Casting values to strings or else ID value of 0 is interpreted as False
@@ -152,13 +150,13 @@ def validate_db(run, conn, partition=''):
     print hasClient, hasSource, hasDB
     if hasClient and hasSource and hasDB:
         # print 'Client file, upload file, and DB info is good'
-        return True
+        return (True, True)
     else:
         print 'One or more validate_db checks have failed'
-        return False
+        return (hasClient and hasSource, hasDB)
         
 
-def analyze_runs(runs, partitions, rerun=False):
+def analyze_runs(runs, partitions, end_delay, rerun=False):
 
     # First make connection to database
     conn_str = u'cms_trk_r/1A3C5E7G:FIN@cms_omds_lb'
@@ -172,10 +170,11 @@ def analyze_runs(runs, partitions, rerun=False):
 
         run = int(run[3:])
         hasEDM = False
+        hasComm = False
         dbValid = False
         timeValid = False
 
-        print '***************************************************'
+        print '\n***************************************************'
         print 'Starting run', run
         
         # first get run information
@@ -195,11 +194,16 @@ def analyze_runs(runs, partitions, rerun=False):
         else:
             partition = [partition]
 
-        # First check if run is finished to see if we should continue looking at it
-        if end:
+        # Make sure that there is an end time in the db
+        if not end:
+            print 'Run has not yet finished'
+            continue
+        # Now check that the run finished at least N hours ago
+        # Then make sure all time info in DB makes sense
+        if (datetime.datetime.now() - end) > end_delay:
             timeValid = validate_time(start, end)
         else:
-            # Run has not finished yet
+            print 'Run recently finished, skipping and will check again later'
             continue
 
         # Check if run is of the type that we want to run
@@ -217,6 +221,11 @@ def analyze_runs(runs, partitions, rerun=False):
         else:
             continue
 
+        # See if a run is currently being analyzed, by looking for the lock file created in analsis script
+        # If analysis is running, skip run and verify integrity of outputs in later loop
+        if any([os.path.exists('/opt/cmssw/Data/lock_{part}_{run}'.format(part=part, run=run)) for part in partition]):
+            continue
+
         # For runs that are stopped and started multiple times, they will produce extra 0 event runs
         # For those runs, just ignore them and add the run number to list of good runs
         if len(glob.glob('/raid/fff/run{run}/*'.format(run=run))) == 4:
@@ -230,12 +239,12 @@ def analyze_runs(runs, partitions, rerun=False):
             print 'run was analyzed'
             # If EDM file exists, check that analysis finished properly
             hasEDM = validate_events(run)
-            dbValid = validate_db(run, conn)
+            (hasComm, dbValid) = validate_db(run, conn)
             hasRaw = len(glob.glob('{rundir}/run{run}/*.raw'.format(rundir=rundir, run=run))) > 0
             if not hasEDM and hasRaw:
                 print 'Problem in existing EDM file and raw files still exist.\nWill delete EDM file and re-run analysis'
                 #os.system('ls {rundir}/run{run}/run{run}.root'.format(rundir=rundir, run=run))
-                #os.system('rm {rundir}/run{run}/run{run}.root'.format(rundir=rundir, run=run))
+                os.system('rm {rundir}/run{run}/run{run}.root'.format(rundir=rundir, run=run))
             elif not hasEDM and not hasRaw:
                 print '***warning*** Problem validating EDM file but no raw files exist...Will continue with existing file, but problems may ensue'
             elif hasEDM and hasRaw:
@@ -248,31 +257,32 @@ def analyze_runs(runs, partitions, rerun=False):
             # Pack the raw files together and into EDM format and analyze based on run analysis
             print 'Will now perform analysis on run'
             if len(partition) == 1:
-                pass
-                #os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=partition[0]))
-                dbValid = validate_db(run, conn)
+                os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=partition[0]))
+                (hasComm, dbValid) = validate_db(run, conn)
             else:
                 # for spy runs need to loop over all partitions
                 dbValid_part = []
                 for part in partition:
                     # Check if we have already succesfully analyzed this partition
-                    if validate_db(run, conn, part):
-                        dbValid_part.append(True)
+                    if all(validate_db(run, conn, part)):
+                        dbValid_part.append((True, True))
                     else:
-                        #os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=part))
+                        os.system('sh /opt/cmssw/scripts/run_analysis_CC7.sh {run} False True {partition} False False True True'.format(run=run, partition=part))
                         dbValid_part.append(validate_db(run, conn, part))
                 # Make sure check returns true for all partitions
-                dbValid = all(dbValid_part)
+                hasComm = all([valid[0] for valid in dbValid_part])
+                dbValid   = all([valid[1] for valid in dbValid_part])
 
             hasEDM = validate_events(run)
             if hasEDM:
                 delete_raw(run)
 
         # Finally, make sure all validation checks return True
-        print '*** Analysis Validation Checks ****'
+        print '**** Analysis Validation Checks ****'
         print 'Run start and end time are consistent:', timeValid
         print 'EDM File Good:', hasEDM
-        print 'Commissioning and source files exist, analysis added to DB:', dbValid
+        print 'Commissioning and source files exist:', hasComm
+        print 'Analysis added to DB:', dbValid
         print '**** Result ****'
         if timeValid and hasEDM and dbValid:
             print 'Run %d is good\n' % run
@@ -280,11 +290,11 @@ def analyze_runs(runs, partitions, rerun=False):
         elif not rerun:
             # If any check fails, try running it again
             print 'One or more check failed, will re-run over run\n', run
-            analyze_runs(['run%d'%run], partitions, rerun=True)
+            analyze_runs(['run%d'%run], partitions, end_delay, rerun=True)
         else:
             # If run fails second time, add to list of failed runs and continue
             print 'Analysis failed a second time, adding run to fail list\n'
-            write_to_file(run, False, [timeValid, hasEDM, dbValid])
+            write_to_file(run, False, [timeValid, hasEDM, hasComm, dbValid])
             return
 
     return
@@ -292,6 +302,11 @@ def analyze_runs(runs, partitions, rerun=False):
 
 
 def main():
+
+    # Can choose how often the code checks for new runs
+    # And how long code waits until after a run has finished before trying to analyze it
+    frequency = 1*60*60
+    delay = 2
     srv = get_machine()
     # Figure out which partitions to run on
     if srv == 'srv-s2b17-29-01':
@@ -299,12 +314,18 @@ def main():
     elif srv == 'srv-s2b17-30-01':
         partions= ['TO', 'TP']
     partitions = ['TI', 'TM', 'TO', 'TP']
+
+    # How long a run has to be finished until script checks if it's been analyzed
+    end_delay = datetime.timedelta(hours=delay)
+
     runs = get_runlist()
-    print runs
-    #runs = ['run334325', 'run312876', 'run338329', 'run336985', 'run324898', 'run325058', 'run325160']
-    #runs = ['run324898']
-    if len(runs):
-        analyze_runs(runs, partitions)
+    #runs = ['run324879', 'run324898', 'run324971', 'run325058', 'run325160']
+    while True:
+        runs = get_runlist()
+        if len(runs):
+            analyze_runs(runs, partitions, end_delay)
+        break
+        time.sleep(frequency)
     return 0
 
 if __name__ == '__main__':
