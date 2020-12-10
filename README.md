@@ -80,6 +80,7 @@ Once the run has been found in the database, multiple checks are performed to de
         VERY\_FAST\_CONNECTION
     * 27 -
         DELAY\_RANDOM
+
     If the cron-job is run on srv-s2b17-29-01 and srv-s2b17-30-01 in parallel, the following run modes will also be analyzed:
     * 3 -
         CALIBRATION
