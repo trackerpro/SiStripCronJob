@@ -19,11 +19,13 @@ This code runs in the background of the srv-s2b17-29-01 and srv-s2b17-30-01 serv
 
 #### Running the code interactively
 
-To run the code interactively, first setup the environment using:
+To run the code interactively, first setup the environment using:</br>
 `source setup_env.sh`
 
-The code can then be run via:
+The code can then be run via:</br>
 `python stripanalysis.py`
+
+Currently, there is no way to end the script without manually killing the process
 
 In the `main()` function of the script, two variables can be modified:
 * `end_delay`:

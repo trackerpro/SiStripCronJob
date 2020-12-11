@@ -5,10 +5,10 @@ This script is used to automatically look for new strip commissioning runs. When
 
 ## Running the code
 
-To run the code, first run the following command to setup the proper cmssw environment and connect to the database
+To run the code, first run the following command to setup the proper cmssw environment and connect to the database </br>
 `source setup_env.sh`
 
-The cron-job task can then be run via
+The cron-job task can then be run via </br>
 `python stripanalysis.py`
 
 The code will then continue to run and check for new runs every 2 hours until the script is manually killed.
